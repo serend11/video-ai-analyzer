@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Analysis output (generated at runtime)
+video-analysis-*/
