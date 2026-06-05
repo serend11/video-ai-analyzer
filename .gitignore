@@ -12,3 +12,6 @@ Thumbs.db
 
 # Analysis output (generated at runtime)
 video-analysis-*/
+
+# Temp files
+/tmp/video-analyzer-*
