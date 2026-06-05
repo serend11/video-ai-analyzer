@@ -1,8 +1,17 @@
 ---
 name: video-ai-analyzer
-version: 2.0.0
-description: AI-powered video content understanding — extracts frames, analyzes with vision AI (multi-provider: OpenAI/Anthropic/Google/Ollama), transcribes audio with Whisper, generates comprehensive report with auto-summary. Use when the user wants to "understand what's in a video", "analyze video content", "get a summary of a video", "see what happens in this video", or any video comprehension task.
+version: 3.0.0-alpha
+description: >-
+  Local video perception engine — "Whisper for video".
+  DEFAULT MODE: Runs entirely locally (scene detection, color/motion analysis,
+  optional OCR via tesseract, optional transcription via whisper.cpp).
+  No AI vision API required. Outputs time-stamped structured JSON.
+  OPT-IN VISION MODE: Extract frames → GPT-4V/Claude/Gemini describe each frame.
+  Use when the user wants to "understand what's in a video", "analyze video
+  content", "get scene descriptions", "perceive video without AI API".
+  ⚠️ ALPHA — v3 branch, v2 stable on main.
 providers:
+  - local (default, zero API)
   - openai
   - anthropic
   - google
@@ -37,6 +46,9 @@ This produces a full analysis report with auto-generated summary at `./video-ana
 - **Cost Estimation**: Shows estimated API call count before processing
 - **Retry Logic**: Exponential backoff on 429/5xx errors for reliability
 - **Better Validation**: Input validation for all numeric parameters
+- **Config File**: `.video-ai-analyzer.yaml` for per-project defaults
+- **JSON Output**: `--format json` for programmatic consumption
+- **Test Suite**: 42 unit tests covering providers, retry logic, and edge cases
 
 ## 🏗️ Supported Providers
 
@@ -65,7 +77,23 @@ This produces a full analysis report with auto-generated summary at `./video-ana
 | `--temperature T` | `0.7` | Sampling temperature |
 | `--parallel N` | `5` | Max concurrent frame analyses |
 | `--base-url URL` | provider default | Override API base URL |
+| `--format FORMAT` | `markdown` | Output format: markdown\|json |
+| `--config FILE` | auto-discover | Explicit config file path |
 | `--version` | — | Print version and exit |
+
+## ⚙️ Config File
+
+Create `.video-ai-analyzer.yaml` in your project root:
+
+```yaml
+provider: anthropic
+model: claude-3-5-sonnet-20241022
+interval: 5
+max_frames: 30
+format: markdown
+```
+
+Discovery order: `--config` arg → `./.video-ai-analyzer.yaml` → parent dirs → `~/.config/video-ai-analyzer/config.yaml`. CLI flags always override config values.
 
 ## 📖 Examples
 

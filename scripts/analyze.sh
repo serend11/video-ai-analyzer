@@ -1,69 +1,73 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ─── Video AI Analyzer v2 ─────────────────────────────────────────────
-# Multi-provider video understanding: frames → AI vision + audio → Whisper
-# Output: comprehensive Markdown report with auto-generated summary
+# ─── Video AI Analyzer v3 ─────────────────────────────────────────────
+# Perceive video content without AI vision API — "Whisper for video"
 #
-# Supported providers: openai | anthropic | google | ollama | openai-compatible
+# Default: local perception (scene detection + color/motion + OCR + transcript)
+# Opt-in:  AI vision mode via --vision (GPT-4V / Claude / Gemini)
 # ─────────────────────────────────────────────────────────────────────
 
-VERSION="2.0.0"
+VERSION="3.0.0-alpha"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROMPT_FILE="${SCRIPT_DIR}/../references/frame-prompt.md"
 CALL_AI="${SCRIPT_DIR}/call-ai.py"
+LOCAL_PERCEIVE="${SCRIPT_DIR}/local-perceive.py"
 
 # ─── Usage ───────────────────────────────────────────────────────────
 
 usage() {
   cat >&2 <<'EOF'
-Video AI Analyzer — Multi-provider video content understanding
+Video AI Analyzer — Local video perception (no AI API required)
 
 Usage:
   analyze.sh <video-file> [options]
 
-Options:
-  --provider NAME       AI provider: openai|anthropic|google|ollama|openai-compatible
-                        (default: openai)
-  --model MODEL         Vision model name (provider-specific default if unset)
-  --summary-model M     Model for final summary (default: cheaper variant of model)
-  --interval N          Seconds between frame captures (default: 10)
-  --max-frames N        Max frames to analyze — API cost control (default: 20)
-  --out DIR             Output directory (default: ./video-analysis-{name}-{ts})
-  --no-transcribe       Skip audio transcription
-  --language LANG       Whisper language hint (e.g., zh, en, ja)
-  --detail LEVEL        Image detail: low|high|auto (default: low, OpenAI only)
-  --max-tokens N        Max tokens per frame analysis (default: 500)
-  --temperature T       Sampling temperature 0-2 (default: 0.7)
-  --parallel N          Max concurrent frame analyses (default: 5)
-  --base-url URL        Override API base URL for the chosen provider
-  --version             Print version and exit
+Modes:
+  --local              Local perception (DEFAULT): scene detection, color/motion,
+                       optional OCR (tesseract), optional transcription.
+                       Zero cost, zero privacy loss, no API key needed.
+  --vision             AI vision mode: extract frames → GPT-4V/Claude/Gemini
+                       describe each frame. Requires API key.
 
-Environment (per provider):
-  openai / openai-compatible → export OPENAI_API_KEY="sk-..."
-  anthropic                 → export ANTHROPIC_API_KEY="sk-ant-..."
-  google                    → export GOOGLE_API_KEY="..."
-  ollama                    → no key needed (localhost:11434)
+Common options:
+  --out DIR            Output directory (default: ./video-analysis-{name}-{ts})
+  --transcribe         Enable audio transcription (needs whisper.cpp or OpenAI API)
+  --language LANG      Language hint for transcription (e.g., zh, en, ja)
+  --format FORMAT      Output format: json|markdown (default: json for local, markdown for vision)
+  --no-ocr             Disable OCR text extraction in local mode
+  --config FILE        Config file path (auto-discover by default)
+
+Local mode options (--local, default):
+  --scene-threshold N  Scene detection sensitivity 0-1 (default: 0.3)
+  --max-segments N     Max scene segments (default: 50)
+
+AI vision mode options (--vision):
+  --provider NAME      AI provider: openai|anthropic|google|ollama|openai-compatible
+  --model MODEL        Vision model name
+  --interval N         Seconds between frame captures (default: 10)
+  --max-frames N       Max frames to analyze (default: 20)
+  --no-transcribe      Skip audio transcription (in vision mode)
+  --no-summary         Skip AI-generated summary
+  --parallel N         Max concurrent frame analyses (default: 5)
+  --detail LEVEL       Image detail: low|high|auto (OpenAI only)
+
+Environment:
+  Local mode:         None required (ffmpeg + python3 only)
+  Vision mode:        Depends on provider (see --help --vision for details)
 
 Examples:
-  # OpenAI (default)
+  # Default local perception (zero cost, zero API)
   analyze.sh meeting.mp4
 
-  # Anthropic Claude
-  analyze.sh video.mp4 --provider anthropic --model claude-3-5-sonnet-20241022
+  # Local with transcription
+  analyze.sh lecture.mp4 --transcribe --language zh
 
-  # Google Gemini (free tier available)
-  analyze.sh lecture.mp4 --provider google --language zh
+  # AI vision mode (needs API key)
+  analyze.sh product-demo.mp4 --vision --provider openai
 
-  # Local Ollama
-  analyze.sh demo.mp4 --provider ollama --model llava
-
-  # DeepSeek / Groq / any OpenAI-compatible
-  analyze.sh clip.mp4 --provider openai-compatible \
-    --base-url https://api.deepseek.com --model deepseek-chat
-
-  # Long video: sparse sampling + skip transcription
-  analyze.sh movie.mp4 --interval 60 --max-frames 15 --no-transcribe
+  # AI vision with Anthropic Claude
+  analyze.sh video.mp4 --vision --provider anthropic
 EOF
   exit 2
 }
@@ -80,6 +84,83 @@ require_env() {
     echo "  export ${key}=\"your-key\"" >&2
     exit 1
   fi
+}
+
+# ─── Config file support ──────────────────────────────────────────────
+
+# Discover and load a .video-ai-analyzer.yaml config file.
+# Search order: explicit --config path > ./.video-ai-analyzer.yaml >
+# parent dirs (up 3 levels) > ~/.config/video-ai-analyzer/config.yaml
+find_config() {
+  local explicit="${1:-}"
+
+  if [[ -n "$explicit" && -f "$explicit" ]]; then
+    echo "$explicit"
+    return 0
+  elif [[ -n "$explicit" ]]; then
+    echo "Warning: Config file not found: $explicit" >&2
+  fi
+
+  # Check current & parent dirs
+  local dir="$PWD"
+  for _ in 1 2 3 4; do
+    for name in ".video-ai-analyzer.yaml" ".video-ai-analyzer.yml"; do
+      if [[ -f "$dir/$name" ]]; then
+        echo "$dir/$name"
+        return 0
+      fi
+    done
+    dir="$(dirname "$dir")"
+    [[ "$dir" == "/" ]] && break
+  done
+
+  # Check user config dir
+  local user_config="$HOME/.config/video-ai-analyzer/config.yaml"
+  if [[ -f "$user_config" ]]; then
+    echo "$user_config"
+    return 0
+  fi
+
+  return 1
+}
+
+# Load flat key:value YAML config into shell variables prefixed with CFG_
+# Only handles simple string/number values (one level, no nesting).
+load_config() {
+  local file="$1"
+  local key val
+
+  while IFS=: read -r key val; do
+    # Skip comments, empty lines, and sections
+    [[ "$key" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "$(echo "$key" | tr -d '[:space:]')" ]] && continue
+    [[ "$key" =~ ^[[:space:]]*--- ]] && continue
+
+    # Trim whitespace
+    key=$(echo "$key" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+    val=$(echo "$val" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+    # Remove surrounding quotes if present
+    val="${val#\"}"; val="${val%\"}"
+    val="${val#\'}"; val="${val%\'}"
+
+    case "$key" in
+      provider)        CFG_PROVIDER="$val" ;;
+      model)           CFG_MODEL="$val" ;;
+      summary_model)   CFG_SUMMARY_MODEL="$val" ;;
+      interval)        CFG_INTERVAL="$val" ;;
+      max_frames)      CFG_MAX_FRAMES="$val" ;;
+      output_dir)      CFG_OUT="$val" ;;
+      transcribe)      CFG_TRANSCRIBE="$val" ;;
+      language)        CFG_LANGUAGE="$val" ;;
+      detail)          CFG_DETAIL="$val" ;;
+      max_tokens)      CFG_FRAME_MAX_TOKENS="$val" ;;
+      temperature)     CFG_TEMPERATURE="$val" ;;
+      parallel)        CFG_MAX_PARALLEL="$val" ;;
+      base_url)        CFG_BASE_URL="$val" ;;
+      format)          CFG_FORMAT="$val" ;;
+    esac
+  done < "$file"
 }
 
 # ─── Parse arguments ──────────────────────────────────────────────────
@@ -102,7 +183,8 @@ SUMMARY_MODEL=""
 INTERVAL=10
 MAX_FRAMES=20
 OUT=""
-TRANSCRIBE=true
+TRANSCRIBE=false
+NO_SUMMARY=false
 LANGUAGE=""
 DETAIL="low"
 FRAME_MAX_TOKENS=500
@@ -110,6 +192,40 @@ SUMMARY_MAX_TOKENS=2000
 TEMPERATURE=0.7
 MAX_PARALLEL=5
 BASE_URL=""
+FORMAT="markdown"
+CONFIG_FILE=""
+MODE="local"
+SCENE_THRESHOLD="0.3"
+MAX_SEGMENTS=50
+
+# ─── Load config file (before CLI args so CLI can override) ───────────
+
+CONFIG_PATH=$(find_config "$CONFIG_FILE") || true
+if [[ -n "$CONFIG_PATH" ]]; then
+  load_config "$CONFIG_PATH"
+  # Apply config values as defaults (only if not already set by explicit args...)
+  # We set them BEFORE the while loop but after defaults, so CLI args win
+  PROVIDER="${CFG_PROVIDER:-$PROVIDER}"
+  MODEL="${CFG_MODEL:-$MODEL}"
+  SUMMARY_MODEL="${CFG_SUMMARY_MODEL:-$SUMMARY_MODEL}"
+  INTERVAL="${CFG_INTERVAL:-$INTERVAL}"
+  MAX_FRAMES="${CFG_MAX_FRAMES:-$MAX_FRAMES}"
+  OUT="${CFG_OUT:-$OUT}"
+  TRANSCRIBE="${CFG_TRANSCRIBE:-$TRANSCRIBE}"
+  # Normalize boolean strings from YAML
+  case "${TRANSCRIBE,,}" in
+    false|off|no|0) TRANSCRIBE=false ;;
+    true|on|yes|1)  TRANSCRIBE=true ;;
+  esac
+  LANGUAGE="${CFG_LANGUAGE:-$LANGUAGE}"
+  DETAIL="${CFG_DETAIL:-$DETAIL}"
+  FRAME_MAX_TOKENS="${CFG_FRAME_MAX_TOKENS:-$FRAME_MAX_TOKENS}"
+  TEMPERATURE="${CFG_TEMPERATURE:-$TEMPERATURE}"
+  MAX_PARALLEL="${CFG_MAX_PARALLEL:-$MAX_PARALLEL}"
+  BASE_URL="${CFG_BASE_URL:-$BASE_URL}"
+  FORMAT="${CFG_FORMAT:-$FORMAT}"
+  dim "   📄 Config: ${CONFIG_PATH}"
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -126,6 +242,16 @@ while [[ $# -gt 0 ]]; do
     --temperature)     TEMPERATURE="${2:-0.7}"; shift 2 ;;
     --parallel)        MAX_PARALLEL="${2:-5}"; shift 2 ;;
     --base-url)        BASE_URL="${2:-}"; shift 2 ;;
+    --config)           CONFIG_FILE="${2:-}"; shift 2 ;;
+    --format)           FORMAT="${2:-markdown}"; shift 2 ;;
+    --mode)             MODE="${2:-local}"; shift 2 ;;
+    --local)            MODE="local"; shift ;;
+    --vision)           MODE="vision"; shift ;;
+    --no-summary)       NO_SUMMARY=true; shift ;;
+    --transcribe)       TRANSCRIBE=true; shift ;;
+    --scene-threshold)  SCENE_THRESHOLD="${2:-0.3}"; shift 2 ;;
+    --max-segments)     MAX_SEGMENTS="${2:-50}"; shift 2 ;;
+    --no-ocr)           OCR_ENABLED=false; shift ;;
     *) echo "Unknown arg: $1" >&2; usage ;;
   esac
 done
@@ -137,7 +263,61 @@ if [[ ! -f "$IN" ]]; then
   exit 1
 fi
 
-# Validate numeric inputs
+# Check required binaries
+for cmd in ffmpeg ffprobe python3; do
+  if ! command -v "$cmd" &>/dev/null; then
+    echo "Error: Required command not found: $cmd" >&2
+    exit 1
+  fi
+done
+
+# ─── Route to pipeline ────────────────────────────────────────────────
+
+if [[ "$MODE" == "local" ]]; then
+  echo ""
+  bold "🎬 Video AI Analyzer v${VERSION} — Local Perception Mode"
+  dim "   Zero API cost · Zero privacy loss · Pure local processing"
+  echo ""
+
+  # Setup output
+  if [[ "$OUT" == "" ]]; then
+    BASENAME="$(basename "$IN")"
+    NAME="${BASENAME%.*}"
+    TS="$(date +%Y%m%d-%H%M%S)"
+    OUT="./video-analysis-${NAME}-${TS}"
+  fi
+  mkdir -p "$OUT"
+
+  # Default to JSON for local mode
+  if [[ "$FORMAT" == "markdown" ]]; then
+    FORMAT="json"
+  fi
+
+  # Build local-perceive arguments
+  LP_ARGS=("$LOCAL_PERCEIVE" "$IN" "--out" "$OUT/perception.json"
+           "--scene-threshold" "$SCENE_THRESHOLD"
+           "--max-segments" "$MAX_SEGMENTS")
+
+  ${OCR_ENABLED:-true} || LP_ARGS+=("--no-ocr")
+  $TRANSCRIBE && LP_ARGS+=("--transcribe")
+  [[ "$LANGUAGE" != "" ]] && LP_ARGS+=("--language" "$LANGUAGE")
+
+  "${LP_ARGS[@]}"
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  bold "✅ 视频感知完成！（local mode）"
+  echo ""
+  echo "   📊 感知数据: $OUT/perception.json"
+  echo ""
+  echo "   💡 将此 JSON 提供给任何 AI Agent 来理解视频内容。"
+  echo "   AI Agent 可以阅读 segments[].description 和 transcript。"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "$OUT"
+  exit 0
+fi
+
+# ─── Vision mode: validate AI-specific inputs ─────────────────────────
 if ! [[ "$INTERVAL" =~ ^[1-9][0-9]*$ ]]; then
   echo "Error: --interval must be a positive integer (got: $INTERVAL)" >&2
   exit 1
@@ -396,47 +576,14 @@ fi
 
 # Process jobs in parallel
 if [[ $NEW_JOBS -gt 0 ]]; then
-  RUNNING=0
-  COMPLETED=0
-  FAILED=0
-
+  # Write commands to a batch job file
+  BATCH_FILE=$(mktemp /tmp/video-analyzer-batch.XXXXXX)
   while IFS='|' read -r FRAME_PATH FRAME_TIME ANALYSIS_FILE; do
-    FRAME_IDX=$(basename "$FRAME_PATH" | sed 's/frame_\([0-9]*\).*/\1/' | sed 's/^0*//')
-    [[ "$FRAME_IDX" == "" ]] && FRAME_IDX="?"
-
-    RUNNING=$((RUNNING + 1))
-
-    (
-      RESULT=$("$CALL_AI" "$FRAME_PATH" \
-        --provider "$PROVIDER" \
-        --model "$MODEL" \
-        --prompt-file "$FRAME_PROMPT_TMP" \
-        --out "$ANALYSIS_FILE" \
-        --detail "$DETAIL" \
-        --max-tokens "$FRAME_MAX_TOKENS" \
-        --temperature "$TEMPERATURE" \
-        $BASE_URL_ARG 2>&1)
-      EXIT_CODE=$?
-
-      if [[ $EXIT_CODE -ne 0 ]]; then
-        echo "[AI analysis error: $RESULT]" > "$ANALYSIS_FILE"
-      fi
-    ) &
-
-    # Limit concurrency — wait for one to finish when at capacity
-    if [[ $RUNNING -ge $MAX_PARALLEL ]]; then
-      wait -n 2>/dev/null || true
-      RUNNING=$((RUNNING - 1))
-    fi
-
-    # Progress indicator (rough — actual completion tracked by wait)
-    COMPLETED=$((COMPLETED + 1))
-    echo -ne "\r   🔍 Progress: ${COMPLETED}/${NEW_JOBS} dispatched..."
+    echo "\"$CALL_AI\" \"$FRAME_PATH\" --provider \"$PROVIDER\" --model \"$MODEL\" --prompt-file \"$FRAME_PROMPT_TMP\" --out \"$ANALYSIS_FILE\" --detail \"$DETAIL\" --max-tokens \"$FRAME_MAX_TOKENS\" --temperature \"$TEMPERATURE\" $BASE_URL_ARG" >> "$BATCH_FILE"
   done < "$JOB_FILE"
 
-  # Wait for all remaining jobs
-  wait 2>/dev/null || true
-  echo ""
+  "$SCRIPT_DIR/batch-run.py" --jobs "$BATCH_FILE" --parallel "$MAX_PARALLEL" || true
+  rm -f "$BATCH_FILE"
 fi
 
 # Count actual successes
@@ -465,71 +612,32 @@ if [[ $SUCCESS_COUNT -eq 0 ]]; then
 fi
 
 # ─── Step 5: Generate report ──────────────────────────────────────────
+#
+# The report is now generated via generate-report.py, which supports both
+# Markdown and JSON output formats.
+
+GENERATE_REPORT="${SCRIPT_DIR}/generate-report.py"
+if [[ ! -f "$GENERATE_REPORT" ]]; then
+  echo "Error: generate-report.py not found at ${GENERATE_REPORT}" >&2
+  exit 1
+fi
 
 echo ""
-echo "📄 Generating report..."
+echo "📄 Generating report (format: ${FORMAT})..."
 
-REPORT="$OUT/report.md"
+REPORT_EXT="md"
+if [[ "$FORMAT" == "json" ]]; then
+  REPORT_EXT="json"
+fi
+REPORT="$OUT/report.${REPORT_EXT}"
 
-{
-  echo "# 视频分析报告: $(basename "$IN")"
-  echo ""
-  echo "> 分析时间: $(date '+%Y-%m-%d %H:%M:%S')"
-  echo "> 分析引擎: ${PROVIDER}/${MODEL} (视觉) + Whisper (语音)"
-  echo "> 分析工具: Video AI Analyzer v${VERSION}"
-  echo ""
-  
-  echo "## 📊 视频信息"
-  echo ""
-  echo "| 属性 | 值 |"
-  echo "|------|-----|"
-  echo "| 文件名 | \`$(basename "$IN")\` |"
-  echo "| 时长 | $DURATION_FMT ($DURATION 秒) |"
-  echo "| 分辨率 | $RESOLUTION |"
-  echo "| 编码 | $CODEC |"
-  echo "| 帧率 | ${FPS} fps |"
-  echo "| 码率 | $BITRATE |"
-  echo "| 文件大小 | $FILESIZE |"
-  echo "| 音频 | $HAS_AUDIO |"
-  echo ""
-  
-  echo "## 🎙️ 语音转录"
-  echo ""
-  if [[ "$TRANSCRIPT_TEXT" != "" ]]; then
-    echo "$TRANSCRIPT_TEXT"
-  else
-    echo "> *(未进行语音转录，或无音频轨道)*"
-  fi
-  echo ""
-  
-  echo "## 🖼️ 场景分析"
-  echo ""
-  echo "> 共分析 **${ACTUAL_FRAMES}** 个关键帧，间隔约 ${INTERVAL} 秒，成功 ${SUCCESS_COUNT} 帧"
-  echo ""
-  
-  for ((i=0; i<ACTUAL_FRAMES; i++)); do
-    FRAME_TIME="${FRAME_TIMES[$i]}"
-    FRAME_PATH="${FRAME_PATHS[$i]}"
-    FRAME_NAME="$(basename "$FRAME_PATH")"
-    ANALYSIS_FILE="$ANALYSIS_DIR/${FRAME_NAME%.jpg}.txt"
-    
-    echo "### 场景 $((i+1)) — ${FRAME_TIME}"
-    echo ""
-    
-    if [[ -f "$ANALYSIS_FILE" ]]; then
-      cat "$ANALYSIS_FILE"
-    else
-      echo "> *(分析不可用)*"
-    fi
-    echo ""
-  done
-  
-} > "$REPORT"
+# ─── Step 6: Generate AI summary (before report, so it can be embedded) ───
 
-echo "   ✅ Report: $REPORT"
-
-# ─── Step 6: Generate AI summary ──────────────────────────────────────
-
+SUMMARY_FINAL=""
+if $NO_SUMMARY; then
+  echo ""
+  echo "⏭️  Summary skipped (--no-summary)"
+else
 echo ""
 echo "🧠 Generating comprehensive summary (${SUMMARY_MODEL})..."
 
@@ -542,7 +650,7 @@ SUMMARY_INPUT=$(mktemp /tmp/video-analyzer-summary-input.XXXXXX)
   echo "- Codec: ${CODEC}"
   echo "- FPS: ${FPS}"
   echo ""
-  
+
   if [[ "$TRANSCRIPT_TEXT" != "" ]]; then
     echo "## Audio Transcript"
     echo "$TRANSCRIPT_TEXT"
@@ -552,7 +660,7 @@ SUMMARY_INPUT=$(mktemp /tmp/video-analyzer-summary-input.XXXXXX)
     echo "(No transcript available)"
     echo ""
   fi
-  
+
   echo "## Frame-by-Frame Visual Analysis"
   echo ""
   for ((i=0; i<ACTUAL_FRAMES; i++)); do
@@ -560,7 +668,7 @@ SUMMARY_INPUT=$(mktemp /tmp/video-analyzer-summary-input.XXXXXX)
     FRAME_PATH="${FRAME_PATHS[$i]}"
     FRAME_NAME="$(basename "$FRAME_PATH")"
     ANALYSIS_FILE="$ANALYSIS_DIR/${FRAME_NAME%.jpg}.txt"
-    
+
     echo "### Frame $((i+1)) — ${FRAME_TIME}"
     if [[ -f "$ANALYSIS_FILE" ]]; then
       cat "$ANALYSIS_FILE"
@@ -601,27 +709,41 @@ SUMMARY_RESULT=$("$CALL_AI" \
   $BASE_URL_ARG 2>&1)
 SUMMARY_EXIT=$?
 
-# Append summary to report
-{
-  echo "## 🧠 综合摘要"
-  echo ""
-  if [[ $SUMMARY_EXIT -eq 0 && "$SUMMARY_RESULT" != "" ]]; then
-    echo "$SUMMARY_RESULT"
-  else
-    echo "> *(自动摘要生成失败: $SUMMARY_RESULT)*"
-    echo "> 请 AI Agent 阅读上方场景分析和语音转录来撰写摘要。"
-  fi
-  echo ""
-} >> "$REPORT"
-
-if [[ $SUMMARY_EXIT -eq 0 ]]; then
+if [[ $SUMMARY_EXIT -eq 0 && "$SUMMARY_RESULT" != "" ]]; then
+  SUMMARY_FINAL="$SUMMARY_RESULT"
   echo "   ✅ Summary generated"
 else
-  echo "   ⚠️  Summary generation failed — report contains placeholder"
+  SUMMARY_FINAL="Summary generation failed: ${SUMMARY_RESULT}"
+  echo "   ⚠️  Summary generation failed — embedding placeholder"
 fi
 
-# Cleanup
+# Cleanup summary temp files
 rm -f "$SUMMARY_INPUT" "$SUMMARY_PROMPT_FILE"
+
+fi  # --no-summary
+
+# ─── Generate final report ────────────────────────────────────────────
+
+"$GENERATE_REPORT" \
+  --out-dir "$OUT" \
+  --video-file "$IN" \
+  --duration "$DURATION" \
+  --duration-fmt "$DURATION_FMT" \
+  --resolution "$RESOLUTION" \
+  --codec "$CODEC" \
+  --fps "$FPS" \
+  --bitrate "$BITRATE" \
+  --filesize "$FILESIZE" \
+  --has-audio "$HAS_AUDIO" \
+  --provider "$PROVIDER" \
+  --model "$MODEL" \
+  --summary-model "$SUMMARY_MODEL" \
+  --summary "$SUMMARY_FINAL" \
+  --format "$FORMAT" \
+  > "$REPORT"
+
+echo "   ✅ Report: $REPORT"
+
 
 # ─── Done ─────────────────────────────────────────────────────────────
 

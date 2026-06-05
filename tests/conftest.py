@@ -1,0 +1,81 @@
+"""
+Shared test fixtures and helpers for video-ai-analyzer tests.
+"""
+
+import sys
+import os
+import json
+import base64
+import importlib.machinery
+from unittest.mock import MagicMock
+
+# Load call-ai.py as a module (filename has a dash, so normal import won't work)
+SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "..", "scripts")
+CALL_AI_PATH = os.path.join(SCRIPTS_DIR, "call-ai.py")
+
+loader = importlib.machinery.SourceFileLoader("call_ai", CALL_AI_PATH)
+call_ai = loader.load_module()
+
+
+# ─── Mock data ────────────────────────────────────────────────────────
+
+# A tiny 1x1 red JPEG in base64 (valid enough for image detection)
+FAKE_JPEG_BASE64 = base64.b64encode(
+    b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+    b"\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\x09\x09"
+    b"\x08\x0a\x0c\x14\x0d\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a"
+    b"\x1f\x1e\x1d\x1a\x1c\x1c\x20\x24\x2e\x27\x20\x22\x2c\x23\x1c\x1c"
+    b"\x28\x37\x29\x2c\x30\x31\x34\x34\x34\x1f\x27\x39\x3d\x38\x32\x3c"
+    b"\x2e\x33\x34\x32\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11"
+    b"\x00\xff\xc4\x00\x1f\x00\x00\x01\x05\x01\x01\x01\x01\x01\x01\x00"
+    b"\x00\x00\x00\x00\x00\x00\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09"
+    b"\x0a\x0b\xff\xc4\x00\xb5\x10\x00\x02\x01\x03\x03\x02\x04\x03\x05"
+    b"\x05\x04\x04\x00\x00\x01\x7d\x01\x02\x03\x00\x04\x11\x05\x12\x21"
+    b"\x31\x41\x06\x13\x51\x61\x07\x22\x71\x14\x32\x81\x91\xa1\x08\x23"
+    b"\x42\xb1\xc1\x15\x52\xd1\xf0\x24\x33\x62\x72\x82\x09\x0a\x16\x17"
+    b"\x18\x19\x1a\x25\x26\x27\x28\x29\x2a\x34\x35\x36\x37\x38\x39\x3a"
+    b"\x43\x44\x45\x46\x47\x48\x49\x4a\x53\x54\x55\x56\x57\x58\x59\x5a"
+    b"\x63\x64\x65\x66\x67\x68\x69\x6a\x73\x74\x75\x76\x77\x78\x79\x7a"
+    b"\x83\x84\x85\x86\x87\x88\x89\x8a\x92\x93\x94\x95\x96\x97\x98\x99"
+    b"\x9a\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xb2\xb3\xb4\xb5\xb6\xb7"
+    b"\xb8\xb9\xba\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xd2\xd3\xd4\xd5"
+    b"\xd6\xd7\xd8\xd9\xda\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xf1"
+    b"\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\xff\xd9"
+).decode("ascii")
+
+
+def mock_http_response(status=200, body=None):
+    """Create a mock HTTP response object."""
+    if body is None:
+        body = {}
+    mock = MagicMock()
+    mock.status = status
+    mock.read.return_value = json.dumps(body).encode("utf-8")
+    return mock
+
+
+# ─── Sample API responses ─────────────────────────────────────────────
+
+OPENAI_RESPONSE = {
+    "choices": [{"message": {"content": "A person sitting at a desk."}}],
+}
+
+ANTHROPIC_RESPONSE = {
+    "content": [{"type": "text", "text": "A person sitting at a desk."}],
+}
+
+GOOGLE_RESPONSE = {
+    "candidates": [{"content": {"parts": [{"text": "A person sitting at a desk."}]}}],
+}
+
+OLLAMA_RESPONSE = {
+    "message": {"content": "A person sitting at a desk."},
+}
+
+
+# ─── Fixtures ─────────────────────────────────────────────────────────
+
+def pytest_configure(config):
+    """Register custom markers."""
+    config.addinivalue_line("markers", "slow: marks tests as slow")
+    config.addinivalue_line("markers", "integration: marks tests as integration tests")
