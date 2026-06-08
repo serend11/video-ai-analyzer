@@ -625,7 +625,7 @@ def main():
         # ── 5. Build output ──
         output = {
             "engine": "video-ai-analyzer-local",
-            "version": "3.0.0-alpha",
+            "version": "3.1.0",
             "video": meta,
             "tools_available": tools,
             "segment_count": len(segments),

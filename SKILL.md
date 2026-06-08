@@ -1,6 +1,6 @@
 ---
 name: video-ai-analyzer
-version: 3.0.0-alpha
+version: 3.1.0
 description: >-
   Local video perception engine — "Whisper for video".
   DEFAULT MODE: Runs entirely locally (scene detection, color/motion analysis,

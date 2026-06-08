@@ -8,7 +8,7 @@ set -euo pipefail
 # Opt-in:  AI vision mode via --vision (GPT-4V / Claude / Gemini)
 # ─────────────────────────────────────────────────────────────────────
 
-VERSION="3.0.0-alpha"
+VERSION="3.1.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROMPT_FILE="${SCRIPT_DIR}/../references/frame-prompt.md"
 CALL_AI="${SCRIPT_DIR}/call-ai.py"
