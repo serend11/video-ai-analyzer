@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Temporary files
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Analysis output
+video-analysis-*/
+
+# IDE
+.vscode/
+.idea/
+
+# Secrets
+.env
+*.key

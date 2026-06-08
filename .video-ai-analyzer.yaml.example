@@ -1,0 +1,45 @@
+# Video AI Analyzer — Configuration
+# Place this file at any of these locations (found in order):
+#   ./.video-ai-analyzer.yaml
+#   ../.video-ai-analyzer.yaml
+#   ~/.config/video-ai-analyzer/config.yaml
+# CLI arguments always override these defaults.
+
+# AI Provider: openai | anthropic | google | ollama | openai-compatible
+provider: openai
+
+# Vision model for frame analysis
+model: gpt-4o
+
+# Cheaper model for final summary generation
+summary_model: gpt-4o-mini
+
+# Seconds between frame captures
+interval: 10
+
+# Max frames to analyze (controls API cost)
+max_frames: 20
+
+# Max concurrent frame analyses
+parallel: 5
+
+# Audio transcription: true | false
+transcribe: true
+
+# Whisper language hint (auto-detect if empty)
+# language: zh
+
+# Image detail level: low | high | auto (OpenAI only)
+detail: low
+
+# Max tokens per frame analysis response
+max_tokens: 500
+
+# Sampling temperature (0-2)
+temperature: 0.7
+
+# Output format: markdown | json
+format: markdown
+
+# Custom API base URL (e.g., proxy or self-hosted)
+# base_url: https://your-proxy.example.com
