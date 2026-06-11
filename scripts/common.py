@@ -12,7 +12,7 @@ from typing import Optional
 
 
 def run(cmd: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
-    """Run command, return CompletedProcess (never raises)."""
+    """Run command, return CompletedProcess with text output (never raises)."""
     try:
         return subprocess.run(
             cmd, capture_output=True, timeout=timeout, text=True
@@ -22,6 +22,23 @@ def run(cmd: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
     except FileNotFoundError:
         return subprocess.CompletedProcess(
             cmd, -1, "", f"cmd not found: {cmd[0]}"
+        )
+
+
+def run_bytes(cmd: list[str], timeout: int = 120) -> subprocess.CompletedProcess:
+    """Run command, return CompletedProcess with raw bytes output (never raises).
+    
+    Use this when the command outputs binary data (e.g., ffmpeg rawvideo).
+    """
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, -1, b"", b"timeout")
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(
+            cmd, -1, b"", f"cmd not found: {cmd[0]}".encode()
         )
 
 

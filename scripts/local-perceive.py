@@ -49,7 +49,7 @@ from datetime import timedelta
 from typing import Optional
 
 # Shared utilities (eliminates duplication with transcribe-audio.py)
-from common import run, has_cmd, extract_audio, transcribe_whisper_cpp, transcribe_openai
+from common import run, run_bytes, has_cmd, extract_audio, transcribe_whisper_cpp, transcribe_openai
 
 
 def fmt_time(seconds: float) -> str:
@@ -186,8 +186,8 @@ def analyze_visual(frame_path: str, video_path: str,
     """Analyze colors, brightness, and motion for a segment."""
     result = {"brightness": 0.5, "dominant_colors": [], "motion": 0.0}
 
-    # ── Color palette via small thumbnail ──
-    palette = run([
+    # ── Color palette via small thumbnail (binary output) ──
+    palette = run_bytes([
         "ffmpeg", "-i", frame_path, "-vf",
         "palettegen=stats_mode=diff:max_colors=5:reserve_transparent=0",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-frames:v", "1", "-",
@@ -201,8 +201,8 @@ def analyze_visual(frame_path: str, video_path: str,
             colors.append(f"#{r:02x}{g:02x}{b:02x}")
     result["dominant_colors"] = colors[:5] if colors else ["#808080"]
 
-    # ── Brightness (average luminance of thumbnail) ──
-    thumb = run([
+    # ── Brightness (average luminance of thumbnail, binary output) ──
+    thumb = run_bytes([
         "ffmpeg", "-i", frame_path, "-vf", "scale=10:10",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
     ], timeout=10)
