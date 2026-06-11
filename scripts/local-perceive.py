@@ -40,6 +40,7 @@ import sys
 import os
 import json
 import re
+import base64
 import shutil
 import struct
 import tempfile
@@ -549,6 +550,16 @@ def main():
             frame_path = os.path.join(tmpdir, f"seg_{i:04d}.jpg")
             seg["_frame_path"] = frame_path  # stored for optional vision analysis
             if extract_frame(args.video, mid, frame_path):
+                # Embed frame as base64 so the Agent can use its own vision capability
+                # No external API needed — the Agent reads the image directly
+                try:
+                    with open(frame_path, "rb") as f:
+                        frame_bytes = f.read()
+                    if len(frame_bytes) < 5_000_000:  # Skip frames > 5MB
+                        seg["frame_base64"] = base64.b64encode(frame_bytes).decode("ascii")
+                        seg["frame_mime"] = "image/jpeg"
+                except Exception:
+                    pass  # gracefully skip if encoding fails
                 # Core visual analysis (always runs)
                 seg["scene"] = analyze_visual(frame_path, args.video, start, end)
 
@@ -600,7 +611,9 @@ def main():
         if transcript:
             output["transcript"] = transcript
 
-        # ── 6. Write ──
+        # ── 6. Clean internal fields & write ──
+        for seg in output["segments"]:
+            seg.pop("_frame_path", None)
         json_text = json.dumps(output, indent=2, ensure_ascii=False)
         if args.out:
             os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
