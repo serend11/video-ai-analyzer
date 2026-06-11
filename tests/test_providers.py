@@ -147,7 +147,6 @@ class TestGoogleProvider:
     @classmethod
     def setup_class(cls):
         cls.provider = call_ai.GoogleProvider()
-        cls.provider._set_model("gemini-2.0-flash-exp")
 
     def test_name(self):
         assert self.provider.name == "google"
@@ -179,7 +178,7 @@ class TestGoogleProvider:
 
     def test_endpoint(self):
         os.environ["GOOGLE_API_KEY"] = "test-google-key"
-        url = self.provider.get_endpoint()
+        url = self.provider.get_endpoint(model="gemini-2.0-flash-exp")
         assert "gemini-2.0-flash-exp" in url
         assert "key=test-google-key" in url
         assert "generativelanguage.googleapis.com" in url

@@ -488,6 +488,8 @@ def main():
                         help="Vision model name (provider default if empty)")
     parser.add_argument("--vision-max-tokens", type=int, default=300,
                         help="Max tokens per vision analysis (default: 300)")
+    parser.add_argument("--quiet", action="store_true", default=False,
+                        help="Suppress progress output (for agent integration)")
 
     args = parser.parse_args()
 
@@ -522,10 +524,14 @@ def main():
     # ── 3. Process each segment ──
     segments = []
     tmpdir = tempfile.mkdtemp(prefix="video-perceive-")
+    quiet = getattr(args, "quiet", False)
 
     try:
         total = len(scene_times) - 1
         for i in range(total):
+            if not quiet and total > 1:
+                print(f"\r   🔍 Processing segment {i+1}/{total}...",
+                      end="", flush=True, file=sys.stderr)
             start = scene_times[i]
             end = scene_times[i + 1]
             mid = (start + end) / 2

@@ -8,7 +8,7 @@ set -euo pipefail
 # Opt-in:  AI vision mode via --vision (GPT-4V / Claude / Gemini)
 # ─────────────────────────────────────────────────────────────────────
 
-VERSION="3.1.0"
+VERSION="3.2.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROMPT_FILE="${SCRIPT_DIR}/../references/frame-prompt.md"
 CALL_AI="${SCRIPT_DIR}/call-ai.py"
@@ -199,6 +199,11 @@ CONFIG_FILE=""
 MODE="local"
 SCENE_THRESHOLD="0.3"
 MAX_SEGMENTS=50
+OCR_ENABLED=true
+VISION_ENABLED=false
+VISION_PROVIDER="openai"
+VISION_MODEL=""
+VISION_MAX_TOKENS=300
 
 # ─── Load config file (before CLI args so CLI can override) ───────────
 
@@ -248,7 +253,10 @@ while [[ $# -gt 0 ]]; do
     --format)           FORMAT="${2:-markdown}"; shift 2 ;;
     --mode)             MODE="${2:-local}"; shift 2 ;;
     --local)            MODE="local"; shift ;;
-    --vision)           MODE="vision"; shift ;;
+    --vision)           VISION_ENABLED=true; shift ;;
+    --vision-provider)  VISION_PROVIDER="${2:-openai}"; shift 2 ;;
+    --vision-model)     VISION_MODEL="${2:-}"; shift 2 ;;
+    --vision-max-tokens) VISION_MAX_TOKENS="${2:-300}"; shift 2 ;;
     --no-summary)       NO_SUMMARY=true; shift ;;
     --transcribe)       TRANSCRIBE=true; shift ;;
     --scene-threshold)  SCENE_THRESHOLD="${2:-0.3}"; shift 2 ;;
@@ -275,6 +283,11 @@ done
 
 # ─── Route to pipeline ────────────────────────────────────────────────
 
+# --vision without --local means full vision mode (extract frames + AI)
+if $VISION_ENABLED && [[ "$MODE" != "local" ]]; then
+  MODE="vision"
+fi
+
 if [[ "$MODE" == "local" ]]; then
   echo ""
   bold "🎬 Video AI Analyzer v${VERSION} — Local Perception Mode"
@@ -290,7 +303,7 @@ if [[ "$MODE" == "local" ]]; then
   fi
   mkdir -p "$OUT"
 
-  # Default to JSON for local mode
+  # Default to JSON for local mode (unless user explicitly requested markdown)
   if [[ "$FORMAT" == "markdown" ]]; then
     FORMAT="json"
   fi
@@ -303,6 +316,14 @@ if [[ "$MODE" == "local" ]]; then
   ${OCR_ENABLED:-true} || LP_ARGS+=("--no-ocr")
   $TRANSCRIBE && LP_ARGS+=("--transcribe")
   [[ "$LANGUAGE" != "" ]] && LP_ARGS+=("--language" "$LANGUAGE")
+
+  # Pass vision args to local-perceive.py for AI image recognition
+  if $VISION_ENABLED; then
+    LP_ARGS+=("--vision")
+    [[ -n "${VISION_PROVIDER:-}" ]] && LP_ARGS+=("--vision-provider" "$VISION_PROVIDER")
+    [[ -n "${VISION_MODEL:-}" ]] && LP_ARGS+=("--vision-model" "$VISION_MODEL")
+    LP_ARGS+=("--vision-max-tokens" "$VISION_MAX_TOKENS")
+  fi
 
   "${LP_ARGS[@]}"
 
