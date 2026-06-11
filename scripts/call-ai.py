@@ -37,15 +37,11 @@ import json
 import base64
 import time
 import argparse
-import mimetypes
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
-VERSION = "2.0.0"
+VERSION = "3.2.0"
 
-# ─── Retry configuration ──────────────────────────────────────────────
-MAX_RETRIES = 3
-BASE_RETRY_DELAY = 1.0  # seconds; doubles each retry
 RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
 
 
@@ -60,7 +56,7 @@ class AIProvider:
     default_model: str = ""
     default_summary_model: str = ""
 
-    def get_endpoint(self) -> str:
+    def get_endpoint(self, model: str = "") -> str:
         raise NotImplementedError
 
     def get_auth_headers(self) -> dict:
@@ -161,17 +157,15 @@ class GoogleProvider(AIProvider):
     default_model = "gemini-2.0-flash-exp"
     default_summary_model = "gemini-2.0-flash-exp"  # already cheap
 
-    def get_endpoint(self) -> str:
+    def get_endpoint(self, model: str = "") -> str:
+        m = model or self.default_model
         base = os.environ.get(
             "GOOGLE_BASE_URL",
             "https://generativelanguage.googleapis.com",
         )
         key = os.environ["GOOGLE_API_KEY"]
         return (f"{base.rstrip('/')}/v1beta/models/"
-                f"{self._current_model}:generateContent?key={key}")
-
-    def _set_model(self, model: str):
-        self._current_model = model
+                f"{m}:generateContent?key={key}")
 
     def get_auth_headers(self) -> dict:
         return {}  # API key in query string
@@ -280,9 +274,14 @@ def encode_image(path: str) -> tuple[str, str]:
 
 
 def call_api(provider: AIProvider, payload: dict, headers: dict,
-             max_retries: int, retry_delay: float) -> dict:
+             max_retries: int, retry_delay: float,
+             model: str = "") -> dict:
     """Call the AI API with exponential backoff retry."""
-    url = provider.get_endpoint()
+    # Google provider needs model name in the endpoint URL
+    if hasattr(provider, 'get_endpoint') and 'model' in provider.get_endpoint.__code__.co_varnames:
+        url = provider.get_endpoint(model=model)
+    else:
+        url = provider.get_endpoint()
     body = json.dumps(payload).encode("utf-8")
     all_headers = {"Content-Type": "application/json", **headers}
 
@@ -366,10 +365,10 @@ def main():
                         help="Image detail level for OpenAI (default: low)")
 
     # Retry
-    parser.add_argument("--max-retries", type=int, default=MAX_RETRIES,
-                        help=f"Max retry attempts (default: {MAX_RETRIES})")
-    parser.add_argument("--retry-delay", type=float, default=BASE_RETRY_DELAY,
-                        help=f"Base retry delay in seconds (default: {BASE_RETRY_DELAY})")
+    parser.add_argument("--max-retries", type=int, default=3,
+                        help="Max retry attempts (default: 3)")
+    parser.add_argument("--retry-delay", type=float, default=1.0,
+                        help="Base retry delay in seconds (default: 1.0)")
 
     args = parser.parse_args()
 
@@ -383,10 +382,6 @@ def main():
             os.environ["OPENAI_BASE_URL"] = args.base_url
         else:
             os.environ[env_key] = args.base_url
-
-    # For Google, we need to set the model before building the endpoint
-    if isinstance(provider, GoogleProvider):
-        provider._set_model(args.model or provider.default_model)
 
     # ─── Validate API key ──────────────────────────────────────────────
     env_key = PROVIDER_ENV_KEYS.get(args.provider, "")
@@ -437,7 +432,7 @@ def main():
 
     # ─── Call API with retry ───────────────────────────────────────────
     data = call_api(provider, payload, headers,
-                    args.max_retries, args.retry_delay)
+                    args.max_retries, args.retry_delay, model=model)
 
     # ─── Parse response ────────────────────────────────────────────────
     try:

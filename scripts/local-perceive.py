@@ -40,38 +40,17 @@ import sys
 import os
 import json
 import re
+import base64
 import shutil
 import struct
 import tempfile
 import subprocess
 import argparse
-from pathlib import Path
 from datetime import timedelta
 from typing import Optional
 
-
-# ═══════════════════════════════════════════════════════════════════════
-# Helpers
-# ═══════════════════════════════════════════════════════════════════════
-
-def run(cmd: list[str], timeout: int = 120, check: bool = False
-        ) -> subprocess.CompletedProcess:
-    """Run command, return CompletedProcess (never raises)."""
-    try:
-        return subprocess.run(
-            cmd, capture_output=True, timeout=timeout, text=True
-        )
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(cmd, -1, "", "timeout")
-    except FileNotFoundError:
-        return subprocess.CompletedProcess(
-            cmd, -1, "", f"cmd not found: {cmd[0]}"
-        )
-
-
-def has_cmd(name: str) -> bool:
-    """Check if a CLI tool is available."""
-    return shutil.which(name) is not None
+# Shared utilities (eliminates duplication with transcribe-audio.py)
+from common import run, run_bytes, has_cmd, extract_audio, transcribe_whisper_cpp, transcribe_openai
 
 
 def fmt_time(seconds: float) -> str:
@@ -82,10 +61,6 @@ def fmt_time(seconds: float) -> str:
     m, s = divmod(r, 60)
     ms = int((seconds - ts) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
-
-
-def safe_div(a, b, default=0.0):
-    return a / b if b else default
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -212,8 +187,8 @@ def analyze_visual(frame_path: str, video_path: str,
     """Analyze colors, brightness, and motion for a segment."""
     result = {"brightness": 0.5, "dominant_colors": [], "motion": 0.0}
 
-    # ── Color palette via small thumbnail ──
-    palette = run([
+    # ── Color palette via small thumbnail (binary output) ──
+    palette = run_bytes([
         "ffmpeg", "-i", frame_path, "-vf",
         "palettegen=stats_mode=diff:max_colors=5:reserve_transparent=0",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-frames:v", "1", "-",
@@ -227,8 +202,8 @@ def analyze_visual(frame_path: str, video_path: str,
             colors.append(f"#{r:02x}{g:02x}{b:02x}")
     result["dominant_colors"] = colors[:5] if colors else ["#808080"]
 
-    # ── Brightness (average luminance of thumbnail) ──
-    thumb = run([
+    # ── Brightness (average luminance of thumbnail, binary output) ──
+    thumb = run_bytes([
         "ffmpeg", "-i", frame_path, "-vf", "scale=10:10",
         "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
     ], timeout=10)
@@ -313,132 +288,41 @@ def try_face_detect(frame_path: str) -> int:
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Optional — Audio Transcription
+# Optional — Audio Transcription (delegated to common.py)
 # ═══════════════════════════════════════════════════════════════════════
-
-def _extract_audio(video_path: str, output_path: str) -> bool:
-    """Extract audio track as 16kHz mono WAV."""
-    result = run([
-        "ffmpeg", "-y", "-i", video_path,
-        "-vn", "-ar", "16000", "-ac", "1", "-sample_fmt", "s16",
-        output_path,
-    ], timeout=120)
-    return result.returncode == 0 and os.path.isfile(output_path)
-
-
-def _transcribe_whisper_cpp(audio_path: str, language: str = ""
-                             ) -> Optional[dict]:
-    """Transcribe using local whisper.cpp."""
-    if not has_cmd("whisper-cpp") and not has_cmd("whisper"):
-        return None
-
-    binary = has_cmd("whisper-cpp") and "whisper-cpp" or "whisper"
-    # Look for model in common locations
-    model_dirs = [
-        os.path.expanduser("~/.cache/whisper/"),
-        os.path.expanduser("~/whisper.cpp/models/"),
-        "/usr/local/share/whisper/",
-    ]
-    model_path = ""
-    for d in model_dirs:
-        for name in ["ggml-base.bin", "ggml-small.bin", "ggml-tiny.bin"]:
-            candidate = os.path.join(d, name)
-            if os.path.isfile(candidate):
-                model_path = candidate
-                break
-        if model_path:
-            break
-
-    if not model_path:
-        return None
-
-    cmd = [binary, "-m", model_path, "-f", audio_path, "-oj", "-of", audio_path]
-    if language:
-        cmd.extend(["-l", language])
-    result = run(cmd, timeout=300)
-
-    json_out = audio_path + ".json"
-    if os.path.isfile(json_out):
-        try:
-            with open(json_out, encoding="utf-8") as f:
-                data = json.load(f)
-            os.unlink(json_out)
-            return {"engine": "whisper.cpp", "segments": data.get("transcription", data)}
-        except Exception:
-            pass
-    return None
-
-
-def _transcribe_openai(audio_path: str, language: str = "") -> Optional[dict]:
-    """Transcribe using OpenAI Whisper API."""
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        return None
-
-    import urllib.request
-    import urllib.error
-
-    boundary = "----WhisperBoundary2026"
-    body = bytearray()
-
-    def add_field(name: str, value: str):
-        body.extend(
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
-            f"{value}\r\n".encode()
-        )
-
-    add_field("model", "whisper-1")
-    add_field("response_format", "verbose_json")
-    if language:
-        add_field("language", language)
-
-    body.extend(
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n'
-        f"Content-Type: audio/wav\r\n\r\n".encode()
-    )
-    with open(audio_path, "rb") as f:
-        body.extend(f.read())
-    body.extend(f"\r\n--{boundary}--\r\n".encode())
-
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/audio/transcriptions",
-        data=bytes(body),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read().decode())
-            return {
-                "engine": "openai-whisper",
-                "segments": data.get("segments", []),
-                "text": data.get("text", ""),
-            }
-    except Exception:
-        return None
-
 
 def try_transcribe(video_path: str, language: str = ""
                    ) -> Optional[dict]:
     """Transcribe video audio. Tries whisper.cpp → OpenAI → fail gracefully."""
     tmp = tempfile.mktemp(suffix="_audio.wav")
     try:
-        if not _extract_audio(video_path, tmp):
+        if not extract_audio(video_path, tmp):
             return None
 
-        # Try local first
-        result = _transcribe_whisper_cpp(tmp, language)
-        if result:
-            return result
+        # Try local whisper.cpp (JSON mode)
+        json_result = transcribe_whisper_cpp(tmp, language, output_format="json")
+        if json_result:
+            try:
+                data = json.loads(json_result)
+                return {
+                    "engine": "whisper.cpp",
+                    "segments": data.get("transcription", data),
+                }
+            except json.JSONDecodeError:
+                pass
 
-        # Fallback to OpenAI
-        result = _transcribe_openai(tmp, language)
-        if result:
-            return result
+        # Fallback to OpenAI Whisper API (verbose_json mode)
+        openai_result = transcribe_openai(tmp, language, output_format="verbose_json")
+        if openai_result:
+            try:
+                data = json.loads(openai_result)
+                return {
+                    "engine": "openai-whisper",
+                    "segments": data.get("segments", []),
+                    "text": data.get("text", ""),
+                }
+            except json.JSONDecodeError:
+                pass
 
         return None
     finally:
@@ -509,6 +393,67 @@ def synthesize_description(segment: dict, tools_available: dict) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# AI Vision Recognition (optional enhancement for local mode)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _run_vision_recognition(segments: list[dict], args) -> None:
+    """
+    Enhance local perception segments with AI vision descriptions.
+    
+    Calls call-ai.py for each segment's key frame to get a detailed
+    AI-powered description of what's in the image. Results are added
+    as `vision_description` field to each segment.
+    
+    Requires: --vision flag, API key (OPENAI_API_KEY etc.)
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    call_ai = os.path.join(script_dir, "call-ai.py")
+    frame_prompt_file = os.path.join(
+        os.path.dirname(script_dir), "references", "frame-prompt.md"
+    )
+
+    # Load frame prompt
+    prompt = "Describe this video frame in detail."
+    if os.path.isfile(frame_prompt_file):
+        with open(frame_prompt_file, "r", encoding="utf-8") as f:
+            prompt = f.read().strip()
+
+    provider = getattr(args, "vision_provider", "openai")
+    model = getattr(args, "vision_model", "")
+    max_tokens = getattr(args, "vision_max_tokens", 300)
+
+    for i, seg in enumerate(segments):
+        frame_path = seg.get("_frame_path", "")
+        if not frame_path or not os.path.isfile(frame_path):
+            continue
+
+        cmd = [
+            sys.executable, call_ai,
+            frame_path,
+            "--provider", provider,
+            "--prompt", prompt,
+            "--max-tokens", str(max_tokens),
+        ]
+        if model:
+            cmd.extend(["--model", model])
+
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=60
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                seg["vision_description"] = result.stdout.strip()
+            else:
+                seg["vision_description"] = None
+        except (subprocess.TimeoutExpired, Exception):
+            seg["vision_description"] = None
+
+    # Clean up internal frame path reference (not for output)
+    for seg in segments:
+        seg.pop("_frame_path", None)
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Main Pipeline
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -535,6 +480,17 @@ def main():
                         help="Enable audio transcription")
     parser.add_argument("--language", default="",
                         help="Language hint for transcription (e.g. zh, en)")
+    parser.add_argument("--vision", action="store_true", default=False,
+                        help="Enable AI vision recognition for key frames")
+    parser.add_argument("--vision-provider", default="openai",
+                        choices=["openai", "anthropic", "google", "ollama", "openai-compatible"],
+                        help="AI provider for vision (default: openai)")
+    parser.add_argument("--vision-model", default="",
+                        help="Vision model name (provider default if empty)")
+    parser.add_argument("--vision-max-tokens", type=int, default=300,
+                        help="Max tokens per vision analysis (default: 300)")
+    parser.add_argument("--quiet", action="store_true", default=False,
+                        help="Suppress progress output (for agent integration)")
 
     args = parser.parse_args()
 
@@ -569,10 +525,14 @@ def main():
     # ── 3. Process each segment ──
     segments = []
     tmpdir = tempfile.mkdtemp(prefix="video-perceive-")
+    quiet = getattr(args, "quiet", False)
 
     try:
         total = len(scene_times) - 1
         for i in range(total):
+            if not quiet and total > 1:
+                print(f"\r   🔍 Processing segment {i+1}/{total}...",
+                      end="", flush=True, file=sys.stderr)
             start = scene_times[i]
             end = scene_times[i + 1]
             mid = (start + end) / 2
@@ -588,7 +548,18 @@ def main():
 
             # Extract representative frame
             frame_path = os.path.join(tmpdir, f"seg_{i:04d}.jpg")
+            seg["_frame_path"] = frame_path  # stored for optional vision analysis
             if extract_frame(args.video, mid, frame_path):
+                # Embed frame as base64 so the Agent can use its own vision capability
+                # No external API needed — the Agent reads the image directly
+                try:
+                    with open(frame_path, "rb") as f:
+                        frame_bytes = f.read()
+                    if len(frame_bytes) < 5_000_000:  # Skip frames > 5MB
+                        seg["frame_base64"] = base64.b64encode(frame_bytes).decode("ascii")
+                        seg["frame_mime"] = "image/jpeg"
+                except Exception:
+                    pass  # gracefully skip if encoding fails
                 # Core visual analysis (always runs)
                 seg["scene"] = analyze_visual(frame_path, args.video, start, end)
 
@@ -615,7 +586,13 @@ def main():
             seg["description"] = synthesize_description(seg, tools)
             segments.append(seg)
 
-        # ── 4. Transcription (optional) ──
+        # ── 4. AI Vision recognition (optional) ──
+        # Uses AI vision API to describe key frames for richer understanding.
+        # Requires --vision flag + API key. Uses call-ai.py under the hood.
+        if args.vision:
+            _run_vision_recognition(segments, args)
+
+        # ── 5. Transcription (optional) ──
         transcript = None
         if args.transcribe and has_audio:
             t = try_transcribe(args.video, args.language)
@@ -625,7 +602,7 @@ def main():
         # ── 5. Build output ──
         output = {
             "engine": "video-ai-analyzer-local",
-            "version": "3.0.0-alpha",
+            "version": "3.2.0",
             "video": meta,
             "tools_available": tools,
             "segment_count": len(segments),
@@ -634,7 +611,9 @@ def main():
         if transcript:
             output["transcript"] = transcript
 
-        # ── 6. Write ──
+        # ── 6. Clean internal fields & write ──
+        for seg in output["segments"]:
+            seg.pop("_frame_path", None)
         json_text = json.dumps(output, indent=2, ensure_ascii=False)
         if args.out:
             os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)

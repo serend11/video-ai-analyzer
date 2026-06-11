@@ -8,11 +8,13 @@ set -euo pipefail
 # Opt-in:  AI vision mode via --vision (GPT-4V / Claude / Gemini)
 # ─────────────────────────────────────────────────────────────────────
 
-VERSION="3.0.0-alpha"
+VERSION="3.2.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROMPT_FILE="${SCRIPT_DIR}/../references/frame-prompt.md"
 CALL_AI="${SCRIPT_DIR}/call-ai.py"
 LOCAL_PERCEIVE="${SCRIPT_DIR}/local-perceive.py"
+TRANSCRIBE_AUDIO="${SCRIPT_DIR}/transcribe-audio.py"
+GENERATE_REPORT="${SCRIPT_DIR}/generate-report.py"
 
 # ─── Usage ───────────────────────────────────────────────────────────
 
@@ -197,6 +199,11 @@ CONFIG_FILE=""
 MODE="local"
 SCENE_THRESHOLD="0.3"
 MAX_SEGMENTS=50
+OCR_ENABLED=true
+VISION_ENABLED=false
+VISION_PROVIDER="openai"
+VISION_MODEL=""
+VISION_MAX_TOKENS=300
 
 # ─── Load config file (before CLI args so CLI can override) ───────────
 
@@ -246,7 +253,10 @@ while [[ $# -gt 0 ]]; do
     --format)           FORMAT="${2:-markdown}"; shift 2 ;;
     --mode)             MODE="${2:-local}"; shift 2 ;;
     --local)            MODE="local"; shift ;;
-    --vision)           MODE="vision"; shift ;;
+    --vision)           VISION_ENABLED=true; shift ;;
+    --vision-provider)  VISION_PROVIDER="${2:-openai}"; shift 2 ;;
+    --vision-model)     VISION_MODEL="${2:-}"; shift 2 ;;
+    --vision-max-tokens) VISION_MAX_TOKENS="${2:-300}"; shift 2 ;;
     --no-summary)       NO_SUMMARY=true; shift ;;
     --transcribe)       TRANSCRIBE=true; shift ;;
     --scene-threshold)  SCENE_THRESHOLD="${2:-0.3}"; shift 2 ;;
@@ -273,6 +283,11 @@ done
 
 # ─── Route to pipeline ────────────────────────────────────────────────
 
+# --vision without --local means full vision mode (extract frames + AI)
+if $VISION_ENABLED && [[ "$MODE" != "local" ]]; then
+  MODE="vision"
+fi
+
 if [[ "$MODE" == "local" ]]; then
   echo ""
   bold "🎬 Video AI Analyzer v${VERSION} — Local Perception Mode"
@@ -288,7 +303,7 @@ if [[ "$MODE" == "local" ]]; then
   fi
   mkdir -p "$OUT"
 
-  # Default to JSON for local mode
+  # Default to JSON for local mode (unless user explicitly requested markdown)
   if [[ "$FORMAT" == "markdown" ]]; then
     FORMAT="json"
   fi
@@ -302,15 +317,38 @@ if [[ "$MODE" == "local" ]]; then
   $TRANSCRIBE && LP_ARGS+=("--transcribe")
   [[ "$LANGUAGE" != "" ]] && LP_ARGS+=("--language" "$LANGUAGE")
 
+  # Pass vision args to local-perceive.py for AI image recognition
+  if $VISION_ENABLED; then
+    LP_ARGS+=("--vision")
+    [[ -n "${VISION_PROVIDER:-}" ]] && LP_ARGS+=("--vision-provider" "$VISION_PROVIDER")
+    [[ -n "${VISION_MODEL:-}" ]] && LP_ARGS+=("--vision-model" "$VISION_MODEL")
+    LP_ARGS+=("--vision-max-tokens" "$VISION_MAX_TOKENS")
+  fi
+
   "${LP_ARGS[@]}"
+
+  # Generate human-readable report from perception.json
+  REPORT_EXT="md"
+  if [[ "$FORMAT" == "json" ]]; then
+    REPORT_EXT="json"
+  fi
+  REPORT="$OUT/report.${REPORT_EXT}"
+
+  "$GENERATE_REPORT" \
+    --mode local \
+    --perception-file "$OUT/perception.json" \
+    --video-file "$IN" \
+    --format "$FORMAT" \
+    > "$REPORT"
 
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   bold "✅ 视频感知完成！（local mode）"
   echo ""
   echo "   📊 感知数据: $OUT/perception.json"
+  echo "   📄 分析报告: $REPORT"
   echo ""
-  echo "   💡 将此 JSON 提供给任何 AI Agent 来理解视频内容。"
+  echo "   💡 将 perception.json 提供给任何 AI Agent 来理解视频内容。"
   echo "   AI Agent 可以阅读 segments[].description 和 transcript。"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "$OUT"
@@ -348,11 +386,15 @@ case "$PROVIDER" in
   *) echo "Error: Unknown provider: $PROVIDER" >&2; exit 1 ;;
 esac
 
-# Transcription always uses OpenAI Whisper
-if $TRANSCRIBE && [[ "${OPENAI_API_KEY:-}" == "" ]]; then
-  echo "⚠️  OPENAI_API_KEY not set — Whisper transcription unavailable."
-  echo "   Transcription will be skipped. Set OPENAI_API_KEY or use --no-transcribe."
-  TRANSCRIBE=false
+# Transcription: local-first (whisper.cpp → OpenAI API). No API key strictly required
+# if whisper.cpp is installed locally. We'll warn but allow it to proceed.
+if $TRANSCRIBE; then
+  if command -v whisper-cpp &>/dev/null || command -v whisper &>/dev/null; then
+    dim "   🎙️  whisper.cpp detected — local transcription available"
+  elif [[ "${OPENAI_API_KEY:-}" == "" ]]; then
+    echo "⚠️  No local whisper.cpp found and OPENAI_API_KEY not set."
+    echo "   Transcription may be unavailable. Install whisper.cpp or set OPENAI_API_KEY."
+  fi
 fi
 
 # ─── Provider defaults ────────────────────────────────────────────────
@@ -439,33 +481,23 @@ TRANSCRIPT_FILE="$OUT/transcript.txt"
 
 if $TRANSCRIBE && [[ "$HAS_AUDIO" != "" && "$HAS_AUDIO" != "none" ]]; then
   echo ""
-  echo "🎙️  Transcribing via Whisper..."
-  
-  AUDIO_FILE="$OUT/audio.mp3"
-  ffmpeg -hide_banner -loglevel error -y -i "$IN" -vn -ar 16000 -ac 1 -b:a 64k "$AUDIO_FILE" 2>/dev/null
-  
-  LANG_ARG=""
+  echo "🎙️  Transcribing (local-first: whisper.cpp → OpenAI API fallback)..."
+
+  TRANS_LANG_ARGS=""
   if [[ "$LANGUAGE" != "" ]]; then
-    LANG_ARG="-F language=${LANGUAGE}"
+    TRANS_LANG_ARGS="--language $LANGUAGE"
   fi
-  
-  TRANSCRIBE_HTTP=$(curl -s -w "%{http_code}" -o "$TRANSCRIPT_FILE" \
-    https://api.openai.com/v1/audio/transcriptions \
-    -H "Authorization: Bearer $OPENAI_API_KEY" \
-    -F "file=@${AUDIO_FILE}" \
-    -F "model=whisper-1" \
-    -F "response_format=text" \
-    ${LANG_ARG} 2>/dev/null)
-  
-  if [[ "$TRANSCRIBE_HTTP" == "200" ]]; then
+
+  # Use local-first transcription engine
+  python3 "$TRANSCRIBE_AUDIO" "$IN" $TRANS_LANG_ARGS --out "$TRANSCRIPT_FILE"
+
+  if [[ -f "$TRANSCRIPT_FILE" && -s "$TRANSCRIPT_FILE" ]]; then
     TRANSCRIPT_TEXT=$(cat "$TRANSCRIPT_FILE")
     echo "   ✅ Transcription complete ($(wc -c < "$TRANSCRIPT_FILE" | tr -d ' ') chars)"
   else
-    echo "   ⚠️  Transcription failed (HTTP $TRANSCRIBE_HTTP). Continuing without transcript."
+    echo "   ⚠️  Transcription unavailable. Continuing without transcript."
     TRANSCRIPT_TEXT=""
   fi
-  
-  rm -f "$AUDIO_FILE"
 else
   if ! $TRANSCRIBE; then
     echo ""
@@ -593,7 +625,7 @@ for ((i=0; i<ACTUAL_FRAMES; i++)); do
   ANALYSIS_FILE="$ANALYSIS_DIR/${FRAME_NAME%.jpg}.txt"
   if [[ -f "$ANALYSIS_FILE" && -s "$ANALYSIS_FILE" ]]; then
     FIRST_LINE=$(head -1 "$ANALYSIS_FILE")
-    if [[ "$FIRST_LINE" != "[AI analysis error:"* ]] && [[ "$FIRST_LINE" != "[GPT-4V analysis error:"* ]]; then
+    if [[ "$FIRST_LINE" != "[AI analysis error:"* ]]; then
       SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
     fi
   fi
@@ -615,12 +647,6 @@ fi
 #
 # The report is now generated via generate-report.py, which supports both
 # Markdown and JSON output formats.
-
-GENERATE_REPORT="${SCRIPT_DIR}/generate-report.py"
-if [[ ! -f "$GENERATE_REPORT" ]]; then
-  echo "Error: generate-report.py not found at ${GENERATE_REPORT}" >&2
-  exit 1
-fi
 
 echo ""
 echo "📄 Generating report (format: ${FORMAT})..."

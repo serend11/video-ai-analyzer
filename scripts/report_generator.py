@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 """
-Report generator for Video AI Analyzer v3.
+Report generator for Video AI Analyzer — OPTIMIZED
 
-Supports two modes:
-  --mode local   → Reads perception.json, produces Markdown/JSON report
-  --mode vision  → Reads frame-analysis/ + frames/, produces Markdown/JSON report
-
-Output: Markdown (default) or JSON.
+Generates human-readable reports from perception results.
+Supports Markdown and JSON output formats.
 """
 
 import sys
 import os
 import json
-import argparse
 import re
+import argparse
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -21,9 +18,9 @@ from typing import Optional
 VERSION = "3.2.0"
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 # Helpers
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 
 def fmt_duration(seconds: float) -> str:
     """Seconds → HH:MM:SS"""
@@ -57,13 +54,13 @@ def color_swatch(colors: list[str]) -> str:
     return " ".join(parts)
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# Local mode report
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# Local Mode Report
+# ═══════════════════════════════════════════════════════════════════════════
 
 def generate_local_report(perception: dict, video_file: str,
                           fmt: str = "markdown") -> str:
-    """Generate report from local-perceive.py output (perception.json)."""
+    """Generate report from local-perceive.py output."""
 
     meta = perception.get("video", {})
     segments = perception.get("segments", [])
@@ -83,7 +80,7 @@ def generate_local_report(perception: dict, video_file: str,
             "transcript": transcript,
         }, indent=2, ensure_ascii=False)
 
-    # ── Markdown ───────────────────────────────────────────────────
+    # Markdown output
     lines = []
     lines.append(f"# 🎬 视频感知报告: {meta.get('file', os.path.basename(video_file))}")
     lines.append("")
@@ -127,10 +124,7 @@ def generate_local_report(perception: dict, video_file: str,
         if not text:
             segs = transcript.get("segments", [])
             if isinstance(segs, list):
-                text = " ".join(
-                    s.get("text", "") for s in segs
-                    if isinstance(s, dict)
-                )
+                text = " ".join(s.get("text", "") for s in segs if isinstance(s, dict))
             elif isinstance(segs, str):
                 text = segs
         lines.append(f"> 转录引擎: `{engine}`")
@@ -204,7 +198,6 @@ def generate_local_report(perception: dict, video_file: str,
         end = seg.get("end_fmt", "?")
         dur = seg.get("duration", 0)
         desc = seg.get("description", "")
-        # Truncate long descriptions for table
         if len(desc) > 60:
             desc = desc[:57] + "..."
         lines.append(f"| {idx + 1} | {start}–{end} | {dur:.0f}s | {desc} |")
@@ -213,9 +206,9 @@ def generate_local_report(perception: dict, video_file: str,
     return "\n".join(lines)
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# Vision mode report (from v2, preserved)
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# Vision Mode Report
+# ═══════════════════════════════════════════════════════════════════════════
 
 def parse_frame_filename(name: str) -> dict:
     """Parse frame filename like 'frame_0000_000000.jpg' into index and time."""
@@ -234,8 +227,6 @@ def parse_frame_filename(name: str) -> dict:
 def collect_frames(analysis_dir: str, frames_dir: str) -> list[dict]:
     """Collect frame analysis data from vision mode output."""
     frames = []
-    analysis_dir = analysis_dir or ""
-    frames_dir = frames_dir or ""
 
     if os.path.isdir(analysis_dir):
         for fname in sorted(os.listdir(analysis_dir)):
@@ -280,34 +271,50 @@ def read_transcript(path: str) -> str:
         return ""
 
 
-def generate_vision_report(args: argparse.Namespace, frames: list[dict],
-                           transcript: str, fmt: str = "markdown") -> str:
+def generate_vision_report(
+    video_file: str,
+    duration: float,
+    duration_fmt: str,
+    resolution: str,
+    codec: str,
+    fps: float,
+    provider: str,
+    model: str,
+    summary: str = "",
+    frames_dir: str = "",
+    analysis_dir: str = "",
+    transcript_path: str = "",
+    format_type: str = "markdown",
+) -> str:
     """Generate report from vision mode data."""
 
-    if fmt == "json":
+    frames = []
+    if frames_dir or analysis_dir:
+        frames = collect_frames(analysis_dir, frames_dir)
+
+    transcript = ""
+    if transcript_path:
+        transcript = read_transcript(transcript_path)
+
+    if format_type == "json":
         return json.dumps({
             "version": VERSION,
             "mode": "vision",
             "analyzed_at": datetime.now(timezone.utc).isoformat(),
-            "provider": args.provider,
-            "model": args.model,
-            "summary_model": args.summary_model,
+            "provider": provider,
+            "model": model,
             "video": {
-                "file": os.path.basename(args.video_file),
-                "path": args.video_file,
-                "duration": int(args.duration),
-                "duration_formatted": args.duration_fmt,
-                "resolution": args.resolution,
-                "codec": args.codec,
-                "fps": args.fps,
-                "bitrate": args.bitrate,
-                "filesize": args.filesize,
-                "has_audio": args.has_audio,
+                "file": os.path.basename(video_file),
+                "duration": int(duration),
+                "duration_formatted": duration_fmt,
+                "resolution": resolution,
+                "codec": codec,
+                "fps": fps,
             },
             "transcript": transcript,
             "frames": [
                 {
-                    "index": f["index"],
+                    "index": f.get("index", 0),
                     "timestamp": f.get("timestamp", ""),
                     "seconds": f.get("seconds", 0),
                     "image": f.get("image", ""),
@@ -315,15 +322,15 @@ def generate_vision_report(args: argparse.Namespace, frames: list[dict],
                 }
                 for f in frames
             ],
-            "summary": args.summary or "",
+            "summary": summary,
         }, indent=2, ensure_ascii=False)
 
-    # ── Markdown ───────────────────────────────────────────────────
+    # Markdown output
     lines = []
-    lines.append(f"# 🧠 视频分析报告: {os.path.basename(args.video_file)}")
+    lines.append(f"# 🧠 视频分析报告: {os.path.basename(video_file)}")
     lines.append("")
     lines.append(f"> 📅 分析时间: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
-    lines.append(f"> 🤖 分析引擎: {args.provider}/{args.model} (视觉) + Whisper (语音)")
+    lines.append(f"> 🤖 分析引擎: {provider}/{model} (视觉) + Whisper (语音)")
     lines.append(f"> 🔧 分析工具: Video AI Analyzer v{VERSION}")
     lines.append("")
 
@@ -331,14 +338,11 @@ def generate_vision_report(args: argparse.Namespace, frames: list[dict],
     lines.append("")
     lines.append("| 属性 | 值 |")
     lines.append("|------|-----|")
-    lines.append(f"| 文件名 | `{os.path.basename(args.video_file)}` |")
-    lines.append(f"| 时长 | {args.duration_fmt} ({args.duration} 秒) |")
-    lines.append(f"| 分辨率 | {args.resolution} |")
-    lines.append(f"| 编码 | {args.codec} |")
-    lines.append(f"| 帧率 | {args.fps} fps |")
-    lines.append(f"| 码率 | {args.bitrate} |")
-    lines.append(f"| 文件大小 | {args.filesize} |")
-    lines.append(f"| 音频 | {args.has_audio} |")
+    lines.append(f"| 文件名 | `{os.path.basename(video_file)}` |")
+    lines.append(f"| 时长 | {duration_fmt} ({duration} 秒) |")
+    lines.append(f"| 分辨率 | {resolution} |")
+    lines.append(f"| 编码 | {codec} |")
+    lines.append(f"| 帧率 | {fps} fps |")
     lines.append("")
 
     lines.append("## 🎙️ 语音转录")
@@ -367,8 +371,8 @@ def generate_vision_report(args: argparse.Namespace, frames: list[dict],
 
     lines.append("## 🧠 综合摘要")
     lines.append("")
-    if args.summary:
-        lines.append(args.summary)
+    if summary:
+        lines.append(summary)
     else:
         lines.append("> *(综合摘要未生成)*")
     lines.append("")
@@ -376,59 +380,41 @@ def generate_vision_report(args: argparse.Namespace, frames: list[dict],
     return "\n".join(lines)
 
 
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 # Main
-# ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 
 def main():
     parser = argparse.ArgumentParser(
         description=f"Report generator for Video AI Analyzer v{VERSION}"
     )
-    parser.add_argument("--mode", default="vision",
-                        choices=["local", "vision"],
-                        help="Report mode: local (from perception.json) or vision (from frame-analysis/)")
-
-    # Local mode args
-    parser.add_argument("--perception-file", default="",
-                        help="Path to perception.json (local mode, default: <out-dir>/perception.json)")
-
-    # Vision mode args
-    parser.add_argument("--out-dir", default="",
-                        help="Analysis output directory (vision mode)")
-    parser.add_argument("--video-file", default="",
-                        help="Original video file path")
-    parser.add_argument("--duration", default="0",
-                        help="Duration in seconds")
-    parser.add_argument("--duration-fmt", default="00:00:00",
-                        help="Duration formatted (HH:MM:SS)")
+    parser.add_argument("--mode", default="local", choices=["local", "vision"])
+    parser.add_argument("--perception-file", default="")
+    parser.add_argument("--out-dir", default="")
+    parser.add_argument("--video-file", default="")
+    parser.add_argument("--duration", default="0")
+    parser.add_argument("--duration-fmt", default="00:00:00")
     parser.add_argument("--resolution", default="unknown")
     parser.add_argument("--codec", default="unknown")
     parser.add_argument("--fps", default="unknown")
-    parser.add_argument("--bitrate", default="unknown")
-    parser.add_argument("--filesize", default="unknown")
-    parser.add_argument("--has-audio", default="none")
     parser.add_argument("--provider", default="openai")
     parser.add_argument("--model", default="gpt-4o")
-    parser.add_argument("--summary-model", default="gpt-4o-mini")
-    parser.add_argument("--summary", default="", help="Summary text")
-
-    # Common
+    parser.add_argument("--summary", default="")
     parser.add_argument("--format", default="markdown",
-                        choices=["markdown", "json"],
-                        help="Output format (default: markdown)")
+                        choices=["markdown", "json"])
 
     args = parser.parse_args()
 
-    # ── Local mode ──────────────────────────────────────────────────
+    # Local mode
     if args.mode == "local":
         perception_path = args.perception_file
         if not perception_path and args.out_dir:
             perception_path = os.path.join(args.out_dir, "perception.json")
         if not perception_path:
-            print("Error: --perception-file or --out-dir required for local mode", file=sys.stderr)
+            print("Error: --perception-file or --out-dir required", file=sys.stderr)
             sys.exit(1)
         if not os.path.isfile(perception_path):
-            print(f"Error: perception.json not found at {perception_path}", file=sys.stderr)
+            print(f"Error: perception.json not found: {perception_path}", file=sys.stderr)
             sys.exit(1)
 
         with open(perception_path, "r", encoding="utf-8") as f:
@@ -438,19 +424,36 @@ def main():
         print(generate_local_report(perception, video_file, args.format))
         sys.exit(0)
 
-    # ── Vision mode ─────────────────────────────────────────────────
-    if not args.out_dir:
-        print("Error: --out-dir required for vision mode", file=sys.stderr)
-        sys.exit(1)
+    # Vision mode
+    frames_dir = os.path.join(args.out_dir, "frames") if args.out_dir else ""
+    analysis_dir = os.path.join(args.out_dir, "frame-analysis") if args.out_dir else ""
+    transcript_path = os.path.join(args.out_dir, "transcript.txt") if args.out_dir else ""
 
-    transcript_path = os.path.join(args.out_dir, "transcript.txt")
-    transcript = read_transcript(transcript_path)
+    try:
+        duration = float(args.duration)
+    except ValueError:
+        duration = 0
 
-    analysis_dir = os.path.join(args.out_dir, "frame-analysis")
-    frames_dir = os.path.join(args.out_dir, "frames")
-    frames = collect_frames(analysis_dir, frames_dir)
+    try:
+        fps = float(args.fps)
+    except ValueError:
+        fps = 0
 
-    print(generate_vision_report(args, frames, transcript, args.format))
+    print(generate_vision_report(
+        video_file=args.video_file or "unknown.mp4",
+        duration=duration,
+        duration_fmt=args.duration_fmt,
+        resolution=args.resolution,
+        codec=args.codec,
+        fps=fps,
+        provider=args.provider,
+        model=args.model,
+        summary=args.summary,
+        frames_dir=frames_dir,
+        analysis_dir=analysis_dir,
+        transcript_path=transcript_path,
+        format_type=args.format,
+    ))
 
 
 if __name__ == "__main__":

@@ -1,24 +1,22 @@
-# Dependencies
-node_modules/
-
-# Python cache
+# Python
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 
-# OS files
+# Temporary files
+*.swp
+*.swo
+*~
 .DS_Store
-Thumbs.db
 
-# Analysis output (generated at runtime)
+# Analysis output
 video-analysis-*/
 
-# User config (may contain API keys)
-.video-ai-analyzer.yaml
-.video-ai-analyzer.yml
+# IDE
+.vscode/
+.idea/
 
-# Pytest
-.pytest_cache/
-
-# Temp files
-/tmp/video-analyzer-*
+# Secrets
+.env
+*.key
