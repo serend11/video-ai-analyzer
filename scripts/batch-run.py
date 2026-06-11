@@ -14,8 +14,8 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-def run_cmd(cmd: str) -> tuple[int, str, str]:
-    """Run one shell command, return (index_in_file, exit_code, stderr_tail)."""
+def run_cmd(cmd: str) -> tuple[int, list[str]]:
+    """Run one shell command, return (exit_code, stderr_tail)."""
     try:
         result = subprocess.run(
             cmd, shell=True, capture_output=True, text=True, timeout=300

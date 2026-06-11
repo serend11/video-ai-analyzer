@@ -1,149 +1,199 @@
-# Video AI Analyzer v3
+# Video AI Analyzer v3.2
 
-> **"Whisper for video"** — 让你的 agent 能分析视频
+> **"Whisper for video"** — Let your agent perceive video content.
+> **"视频领域的 Whisper"** — 让你的 agent 能看懂视频内容。
 
-双模式视频感知引擎：
-- **🏠 本地模式（默认）**：场景检测 + 色彩/亮度/运动分析 + OCR + 人脸检测 + 语音转写 — **零 API 费用，零隐私泄露**
-- **🤖 AI 视觉模式（可选）**：抽帧 → GPT-4V/Claude/Gemini 逐帧描述 → AI 自动生成摘要
+Dual-mode video perception engine / 双模式视频感知引擎：
+- **🏠 Local mode (DEFAULT) / 本地模式（默认）**: Scene detection + color/brightness/motion analysis + OCR + face detection + transcription — **zero API cost, zero privacy loss**
+- **🤖 AI Vision mode (opt-in) / AI视觉模式（可选）**: Extract frames → GPT-4V/Claude/Gemini describe each frame → AI-generated summary
+- **🆕 AI image recognition in local mode / 本地模式识图**: Add `--vision` to local mode for AI-powered frame descriptions alongside computational analysis
 
 ---
 
-## 🚀 快速开始
+## 🆕 What's New in v3.2 / v3.2 新特性
+
+- **🆕 AI image recognition for local mode / 本地模式识图**: `--vision` flag adds AI-powered `vision_description` to each segment
+- **Shared utility module / 共享工具模块**: Extracted `common.py` — eliminated ~150 lines of duplicate code
+- **Code cleanup / 代码清理**: Removed dead code (unused imports, functions, parameters), fixed return type annotations
+- **Bug fix / Bug修复**: Fixed outdated error prefix check in `analyze.sh`
+
+## 🚀 Quick Start / 快速开始
 
 ```bash
-# ─── 本地模式（默认，零 API 费用）───────────
+# ─── Local mode (DEFAULT, zero API cost) ───────────
+# ─── 本地模式（默认，零API费用）───────────────────
 ./scripts/analyze.sh meeting.mp4
-# 输出: perception.json（结构化感知数据）+ report.md（人类可读报告）
+# Output / 输出: perception.json + report.md
 
-# ─── 本地 + 语音转写 ─────────────────────
+# ─── Local + AI image recognition (NEW!) ────────────
+# ─── 本地 + AI识图（新功能！）─────────────────────
+export OPENAI_API_KEY="sk-..."
+./scripts/analyze.sh video.mp4 --vision --vision-provider openai
+
+# ─── Local + transcription ─────────────────────────
+# ─── 本地 + 语音转写 ────────────────────────────
 ./scripts/analyze.sh lecture.mp4 --transcribe --language zh
 
-# ─── AI 视觉模式（需要 API key）────────────
+# ─── AI Vision mode (needs API key) ────────────────
+# ─── AI视觉模式（需要API密钥）────────────────────
 export OPENAI_API_KEY="sk-..."
 ./scripts/analyze.sh product-demo.mp4 --vision --provider openai
 ```
 
-## ✨ v3 新特性
+## ✨ v3 Features / v3 特性
 
-- **🏠 本地感知模式（默认）**：场景检测 + 色彩调色板 + 亮度 + 运动估计 + 人脸检测 + OCR — 无需 AI API
-- **Whisper 风格 JSON 输出**：结构化时间戳分段数据，任何 AI Agent 可直接消费
-- **双模式架构**：`--local`（默认，零费用感知）→ `--vision`（AI 深度分析）
-- **本地优先转写**：whisper.cpp（本地）→ OpenAI Whisper API（回退）；无需强制 API key
-- **场景感知采样**：智能场景切换检测替代固定间隔采样
-- **保留所有 v2 视觉特性**：多提供商、并行分析、缓存、重试、费用估算
+- **🏠 Local Perception Mode (DEFAULT) / 本地感知模式**: Scene detection + color palette + brightness + motion + face detection + OCR — no AI API needed
+- **Whisper-like JSON output / Whisper风格输出**: Structured time-stamped segments any AI agent can consume
+- **Dual-mode architecture / 双模式**: `--local` (default, free) → `--vision` (AI-powered)
+- **Local-first transcription / 本地优先转写**: whisper.cpp (local) → OpenAI Whisper API (fallback)
+- **Scene-aware sampling / 场景感知采样**: Intelligent scene-change detection
+- **All v2 vision features / 完整v2功能**: Multi-provider, parallel, caching, retry, cost estimation
 
-## 🏗️ 支持的模式
+## 🏗️ Supported Modes / 支持的模式
 
-| 模式 | 命令 | 费用 | 需要 API key |
+| Mode / 模式 | Command / 命令 | Cost / 费用 | API Key |
 |------|------|------|-------------|
-| **本地感知（默认）** | `analyze.sh video.mp4` | **免费** | ❌ |
-| AI 视觉 | `analyze.sh video.mp4 --vision --provider openai` | 按量付费 | ✅ |
+| **Local perception (default) / 本地感知** | `analyze.sh video.mp4` | **Free / 免费** | ❌ |
+| 🆕 **Local + AI recognition / 本地+识图** | `analyze.sh video.mp4 --vision` | Pay-as-you-go | ✅ |
+| AI Vision / AI视觉 | `analyze.sh video.mp4 --vision --provider openai` | Pay-as-you-go | ✅ |
 
-### 本地模式能力
+### Local Mode Capabilities / 本地模式能力
 
-| 功能 | 依赖 | 说明 |
+| Feature / 功能 | Dependency / 依赖 | Description / 说明 |
 |------|------|------|
-| 场景检测 | ffmpeg | 自动识别场景切换点 |
-| 色彩分析 | ffmpeg | 主色调调色板 + 暖/冷色调判断 |
-| 亮度分析 | ffmpeg | 逐段亮度评估 |
-| 运动估计 | ffmpeg | 场景变化程度 |
-| OCR 文字识别 | tesseract（可选） | 提取画面中文字 |
-| 人脸检测 | ffmpeg facedetect | 检测人脸数量 |
-| 语音转写 | whisper.cpp（可选）→ OpenAI 回退 | 本地优先 |
+| Scene detection / 场景检测 | ffmpeg | Auto-detect scene change points |
+| Color analysis / 色彩分析 | ffmpeg | Dominant color palette + warm/cool tone |
+| Brightness analysis / 亮度分析 | ffmpeg | Per-segment brightness evaluation |
+| Motion estimation / 运动估计 | ffmpeg | Scene change magnitude |
+| OCR text recognition / 文字识别 | tesseract (optional) | Extract text from frames |
+| Face detection / 人脸检测 | ffmpeg facedetect | Count faces per segment |
+| Audio transcription / 语音转写 | whisper.cpp → OpenAI fallback | Local-first transcription |
+| 🆕 AI image recognition / AI识图 | OpenAI/Claude/Gemini/Ollama | AI-powered frame descriptions |
 
-## 🏗️ AI 视觉模式提供商
+## 🏗️ AI Vision Providers / AI视觉提供商
 
-| Provider | 默认视觉模型 | 默认摘要模型 | 认证 |
+| Provider / 提供商 | Default Vision Model | Default Summary Model | Auth / 认证 |
 |----------|------------|------------|------|
 | `openai` | `gpt-4o` | `gpt-4o-mini` | `OPENAI_API_KEY` |
 | `anthropic` | `claude-3-5-sonnet-20241022` | `claude-3-5-haiku-20241022` | `ANTHROPIC_API_KEY` |
 | `google` | `gemini-2.0-flash-exp` | `gemini-2.0-flash-exp` | `GOOGLE_API_KEY` |
-| `ollama` | `llava` | 同上 | 无（本地） |
-| `openai-compatible` | `gpt-4o` | 同上 | `OPENAI_API_KEY` |
+| `ollama` | `llava` | Same | None (local) |
+| `openai-compatible` | `gpt-4o` | Same | `OPENAI_API_KEY` |
 
-## 📖 更多示例
+## 📖 More Examples / 更多示例
 
 ```bash
-BASE="./scripts"
+# ─── Local mode / 本地模式 ─────────────────────────────
+./scripts/analyze.sh meeting.mp4                                    # Default local perception
+./scripts/analyze.sh lecture.mp4 --transcribe --language zh         # + Chinese transcription
+./scripts/analyze.sh video.mp4 --no-ocr --scene-threshold 0.5       # No OCR, adjust sensitivity
+./scripts/analyze.sh video.mp4 --vision --vision-provider openai    # 🆕 + AI image recognition
 
-# ─── 本地模式 ─────────────────────────────
-$BASE/analyze.sh meeting.mp4                                    # 默认本地感知
-$BASE/analyze.sh lecture.mp4 --transcribe --language zh         # +中文语音转写
-$BASE/analyze.sh video.mp4 --no-ocr --scene-threshold 0.5       # 关闭OCR，调灵敏度
-
-# ─── AI 视觉模式 ──────────────────────────
-$BASE/analyze.sh product-demo.mp4 --vision --provider openai
-$BASE/analyze.sh video.mp4 --vision --provider anthropic
-$BASE/analyze.sh lecture.mp4 --vision --provider google --language zh
-$BASE/analyze.sh demo.mp4 --vision --provider ollama --model llava
-$BASE/analyze.sh clip.mp4 --vision --provider openai-compatible \
+# ─── AI Vision mode / AI视觉模式 ──────────────────────────
+./scripts/analyze.sh product-demo.mp4 --vision --provider openai
+./scripts/analyze.sh video.mp4 --vision --provider anthropic
+./scripts/analyze.sh lecture.mp4 --vision --provider google --language zh
+./scripts/analyze.sh demo.mp4 --vision --provider ollama --model llava
+./scripts/analyze.sh clip.mp4 --vision --provider openai-compatible \
   --base-url https://api.deepseek.com --model deepseek-chat
 
-# ─── 长视频稀疏采样 ───────────────────────
-$BASE/analyze.sh movie.mp4 --vision --interval 60 --max-frames 15 --no-transcribe
+# ─── Sparse sampling for long videos / 长视频稀疏采样 ──
+./scripts/analyze.sh movie.mp4 --vision --interval 60 --max-frames 15 --no-transcribe
 ```
 
-## 📋 输出结构
+## 📋 Output Structure / 输出结构
 
-### 本地模式
+### Local Mode / 本地模式
 ```
 video-analysis-{name}-{timestamp}/
-├── perception.json        # 结构化感知数据（Whisper 风格分段 JSON）
-└── report.md              # 人类可读的 Markdown 报告
+├── perception.json        # Structured perception data (Whisper-style segments)
+│                          # 🆕 Includes vision_description when --vision is used
+└── report.md              # Human-readable Markdown report
 ```
 
-### AI 视觉模式
+### AI Vision Mode / AI视觉模式
 ```
 video-analysis-{name}-{timestamp}/
-├── report.md              # 综合分析报告（含 AI 摘要）
-├── transcript.txt         # 语音转写文本
-├── frames/                # 提取的帧图片
-└── frame-analysis/        # 逐帧 AI 描述（缓存）
+├── report.md              # Comprehensive report with AI summary
+├── transcript.txt         # Whisper transcription text
+├── frames/                # Extracted frame images
+└── frame-analysis/        # Per-frame AI descriptions (cached)
 ```
 
-## 🔄 工作流程
+## 🔄 Workflow / 工作流程
 
 ```
                     ┌─────────────┐
+                    │  Video File  │
                     │  视频文件     │
                     └──────┬──────┘
                            │
               ┌────────────┼────────────┐
               ▼            ▼            ▼
-         MODE: local   MODE: vision   (共享)
+         MODE: local   MODE: vision   (shared)
               │            │            │
-    ┌─────────┤     ┌──────┤      ffprobe 元信息
+    ┌─────────┤     ┌──────┤      ffprobe metadata
     ▼         ▼     ▼      ▼            │
-  场景检测  抽帧   帧提取  帧提取    时长/分辨率
+  Scene     Frame   Frame   Frame     Duration/
+  Detection Extract Extract Extract   Resolution
     │         │     │      │
     ▼         ▼     ▼      ▼
-  颜色分析  运动  Vision AI  Whisper
-    │         │    (并行多Provider)  (本地优先)
-    ▼         ▼     │      │
-  OCR+人脸  合成   逐帧描述  文字稿
+  Color     Motion Vision AI  Whisper
+  Analysis          (parallel) (local-first)
     │         │     │      │
+    ▼         ▼     ▼      ▼
+  OCR+Face  Synthe- Frame   Transcript
+            size   Descriptions
+    │         │     │      │
+    ▼         ▼     ▼      ▼
+  🆕 AI Vision (--vision flag)
+    │
     └────┬────┘     └──┬───┘
          ▼             ▼
    perception.json  report.md
-   (结构化感知数据)  (综合分析报告)
 ```
 
-## 🎨 设计哲学
+## 🎨 Design Philosophy / 设计哲学
 
-- **本地优先**：默认模式零 API — 场景检测、色彩分析、运动估计、OCR、人脸检测全部本地运行
-- **双模式**：`--local` 免费感知，`--vision` AI 深度分析
-- **多提供商**：视觉模式支持 OpenAI、Anthropic、Google、Ollama、兼容接口
-- **轻量级**：只需 ffmpeg + python3。零 pip 依赖。零本地模型下载（tesseract/whisper.cpp 可选）
-- **专注**：「看懂」是唯一目标
-- **Agent 友好**：结构化 JSON 输出（本地）或 Markdown 报告（视觉），清晰结构，缓存支持续传
+- **Local-first / 本地优先**: Default mode uses zero API — all processing runs locally
+- **Dual-mode / 双模式**: `--local` for free perception, `--vision` for AI deep analysis
+- **Multi-Provider / 多提供商**: Vision mode supports OpenAI, Anthropic, Google, Ollama, compatible APIs
+- **Lightweight / 轻量级**: Only ffmpeg + python3 needed. Zero pip dependencies
+- **Focused / 专注**: "Understanding video" is the single goal
+- **Agent-friendly / Agent友好**: Structured JSON or Markdown, clear structure, cache for resume
 
-## 🔧 依赖
+## 🔧 Requirements / 依赖
 
-- **ffmpeg** + **ffprobe**：`brew install ffmpeg` 或 `apt install ffmpeg`
-- **python3**：仅标准库 — 无需 pip 安装
-- **API key**（仅 AI 视觉模式）：`OPENAI_API_KEY`、`ANTHROPIC_API_KEY` 或 `GOOGLE_API_KEY` 之一
-- **可选**：`tesseract`（OCR）、`whisper-cpp`（本地语音转写）
+- **ffmpeg** + **ffprobe**: `brew install ffmpeg` or `apt install ffmpeg`
+- **python3**: Standard library only — no pip installs
+- **API key** (vision mode only): `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GOOGLE_API_KEY`
+- **Optional / 可选**: `tesseract` (OCR), `whisper-cpp` (local transcription)
 
-## 📄 License
+## 📂 Project Structure / 项目结构
+
+```
+video-ai-analyzer/
+├── SKILL.md                # Skill definition / 技能定义
+├── README.md               # Documentation / 文档 (zh/en bilingual)
+├── VERSION                 # Version number / 版本号
+├── LICENSE                 # MIT License
+├── scripts/
+│   ├── analyze.sh          # Main entry point / 主入口脚本
+│   ├── common.py           # 🆕 Shared utilities / 共享工具模块
+│   ├── local-perceive.py   # Local perception engine / 本地感知引擎
+│   ├── call-ai.py          # Multi-provider AI API client / 多提供商API客户端
+│   ├── generate-report.py  # Report generator / 报告生成器
+│   ├── transcribe-audio.py # Audio transcription / 音频转录
+│   └── batch-run.py        # Parallel job runner / 并行任务执行器
+├── references/
+│   └── frame-prompt.md     # AI frame description prompt / AI帧描述提示词
+└── tests/
+    ├── conftest.py
+    ├── test_errors.py
+    ├── test_providers.py
+    └── test_retry.py
+```
+
+## 📄 License / 许可证
 
 MIT

@@ -604,7 +604,7 @@ for ((i=0; i<ACTUAL_FRAMES; i++)); do
   ANALYSIS_FILE="$ANALYSIS_DIR/${FRAME_NAME%.jpg}.txt"
   if [[ -f "$ANALYSIS_FILE" && -s "$ANALYSIS_FILE" ]]; then
     FIRST_LINE=$(head -1 "$ANALYSIS_FILE")
-    if [[ "$FIRST_LINE" != "[AI analysis error:"* ]] && [[ "$FIRST_LINE" != "[GPT-4V analysis error:"* ]]; then
+    if [[ "$FIRST_LINE" != "[AI analysis error:"* ]]; then
       SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
     fi
   fi

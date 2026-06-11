@@ -37,15 +37,11 @@ import json
 import base64
 import time
 import argparse
-import mimetypes
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
-VERSION = "2.0.0"
+VERSION = "3.2.0"
 
-# ─── Retry configuration ──────────────────────────────────────────────
-MAX_RETRIES = 3
-BASE_RETRY_DELAY = 1.0  # seconds; doubles each retry
 RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
 
 
@@ -366,10 +362,10 @@ def main():
                         help="Image detail level for OpenAI (default: low)")
 
     # Retry
-    parser.add_argument("--max-retries", type=int, default=MAX_RETRIES,
-                        help=f"Max retry attempts (default: {MAX_RETRIES})")
-    parser.add_argument("--retry-delay", type=float, default=BASE_RETRY_DELAY,
-                        help=f"Base retry delay in seconds (default: {BASE_RETRY_DELAY})")
+    parser.add_argument("--max-retries", type=int, default=3,
+                        help="Max retry attempts (default: 3)")
+    parser.add_argument("--retry-delay", type=float, default=1.0,
+                        help="Base retry delay in seconds (default: 1.0)")
 
     args = parser.parse_args()
 

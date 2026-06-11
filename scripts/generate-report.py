@@ -18,21 +18,12 @@ from datetime import datetime, timezone
 from typing import Optional
 
 
-VERSION = "3.1.0"
+VERSION = "3.2.0"
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════
-
-def safe_get(d: dict, *keys, default=""):
-    """Drill into nested dicts safely."""
-    for k in keys:
-        if not isinstance(d, dict):
-            return default
-        d = d.get(k, default)
-    return d if d is not None else default
-
 
 def fmt_duration(seconds: float) -> str:
     """Seconds → HH:MM:SS"""
